@@ -6,7 +6,6 @@ import {
   isFirebaseConfigured,
   firebaseSignIn,
   firebaseSignUp,
-  firebaseResetPassword,
   firebaseSignOut,
 } from '../config/firebase';
 
@@ -33,27 +32,6 @@ interface AuthContextType {
   }) => Promise<void>;
   logout: () => void;
   switchUserRoleDemo: (role: UserRole) => void;
-  sendOtp: (params: {
-    email?: string;
-    phone_number?: string;
-    country_code?: string;
-    channel: 'email' | 'mobile';
-    purpose?: 'register' | 'reset';
-  }) => Promise<{
-    success: boolean;
-    message: string;
-    channel: string;
-    identifier: string;
-    previewUrl?: string | null;
-    isRealDelivery?: boolean;
-    provider?: string;
-  }>;
-  verifyOtp: (params: {
-    identifier: string;
-    code: string;
-  }) => Promise<{ success: boolean; otpToken?: string; message: string }>;
-  requestPasswordReset: (email: string) => Promise<{ success: boolean; message: string; expiryMinutes: number; resetToken?: string }>;
-  resetPasswordWithToken: (token: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -300,104 +278,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const sendOtp = async (params: {
-    email?: string;
-    phone_number?: string;
-    country_code?: string;
-    channel: 'email' | 'mobile';
-    purpose?: 'register' | 'reset';
-  }) => {
-    setIsLoading(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/auth/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.message || 'Failed to dispatch verification code.');
-      }
-      return data;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const verifyOtp = async (params: { identifier: string; code: string }) => {
-    setIsLoading(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/auth/verify-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.message || 'Verification failed.');
-      }
-      return data;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const requestPasswordReset = async (email: string) => {
-    if (isFirebaseConfigured) {
-      await firebaseResetPassword(email);
-      return {
-        success: true,
-        message: 'Password reset link sent directly via Firebase Authentication.',
-        expiryMinutes: 30,
-      };
-    }
-
-    try {
-      const res = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return {
-          success: true,
-          message: data.message || 'Password reset link generated. Link expires in exactly 30 minutes.',
-          expiryMinutes: 30,
-          resetToken: data.resetToken,
-        };
-      }
-    } catch {
-      // Graceful fallback
-    }
-    return {
-      success: true,
-      message: 'Password reset link sent to your registered email. Security link expires in exactly 30 minutes.',
-      expiryMinutes: 30,
-      resetToken: 'rst-' + Math.random().toString(36).substring(2, 12),
-    };
-  };
-
-  const resetPasswordWithToken = async (token: string, newPassword: string) => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/auth/reset-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, new_password: newPassword }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return { success: true, message: data.message || 'Password successfully updated.' };
-      }
-      const err = await res.json();
-      return { success: false, message: err.message || 'Token expired or invalid.' };
-    } catch {
-      return { success: true, message: 'Password successfully updated.' };
-    }
-  };
-
   return (
     <AuthContext.Provider
       value={{
@@ -409,10 +289,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         register,
         logout,
         switchUserRoleDemo,
-        sendOtp,
-        verifyOtp,
-        requestPasswordReset,
-        resetPasswordWithToken,
       }}
     >
       {children}
