@@ -92,7 +92,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // 1. If Firebase Studio is configured, authenticate via Firebase Auth
+      // 1. Try local Express backend API first
+      let backendError: string | null = null;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+        const res = await fetch(`${API_BASE_URL}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        const data = await res.json().catch(() => ({}));
+
+        if (res.ok && data.user) {
+          setUser(data.user);
+          setToken(data.token);
+          // Sync with Firebase in background if configured and email is provided
+          if (isFirebaseConfigured && payload.email && payload.password) {
+            firebaseSignIn(payload.email, payload.password).catch(() => {});
+          }
+          return;
+        }
+
+        if (res.status === 429) {
+          throw new Error('Too many authentication attempts. Please wait a few moments.');
+        }
+
+        backendError = data.message;
+      } catch (fetchErr: any) {
+        if (fetchErr.name === 'AbortError') {
+          throw new Error('Request timed out while connecting to the server. Please check your connection.');
+        }
+        backendError = fetchErr.message;
+      }
+
+      // 2. If backend did not authenticate, try Firebase Auth if configured & email provided
       if (isFirebaseConfigured && payload.email) {
         try {
           const fbUser = await firebaseSignIn(payload.email, payload.password || fallbackPassword);
@@ -103,39 +141,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         } catch (fbErr: any) {
           console.warn('Firebase authentication attempt:', fbErr.message);
-          if (fbErr.code === 'auth/wrong-password' || fbErr.code === 'auth/invalid-credential') {
-            throw new Error('Incorrect password entered for this Firebase account.');
-          }
-          if (fbErr.code === 'auth/user-not-found') {
-            throw new Error('No user found with this email in Firebase. Please create an account.');
-          }
         }
       }
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 7000);
-
-      const res = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      const data = await res.json().catch(() => ({}));
-
-      if (res.ok && data.user) {
-        setUser(data.user);
-        setToken(data.token);
-        return;
-      }
-
-      if (res.status === 429) {
-        throw new Error('Too many authentication attempts. Rate limit reached; please wait a few moments.');
-      }
-
-      // Check local mock users if backend returns error
+      // 3. Check local mock users if backend & Firebase return error
       const cleanPhone = payload.phone_number ? payload.phone_number.replace(/\D/g, '') : null;
       const found = INITIAL_USERS.find((u) => {
         if (cleanPhone && u.phone_number.replace(/\D/g, '') === cleanPhone) {
@@ -153,12 +162,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      throw new Error(data.message || 'Invalid credentials. Please verify your mobile number or password.');
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw new Error('Request timed out while connecting to the server. Poor network connection detected.');
-      }
-      throw err;
+      throw new Error(backendError || 'Invalid credentials. Please verify your mobile number or email and password.');
     } finally {
       setIsLoading(false);
     }
@@ -180,36 +184,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // 1. If Firebase Studio is configured, register user in Firebase Auth and Firestore
-      if (isFirebaseConfigured && data.email) {
-        try {
-          const fbUser = await firebaseSignUp({
-            email: data.email,
-            password: data.password || 'Password123!',
-            full_name: data.full_name,
-            role: data.role,
-            country_code: data.country_code,
-            phone_number: data.phone_number,
-          });
-          if (fbUser) {
-            setUser(fbUser);
-            setToken(`fb-${fbUser.id}`);
-            // Also notify local Express backend
-            fetch(`${API_BASE_URL}/auth/register`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data),
-            }).catch(() => {});
-            return;
-          }
-        } catch (fbErr: any) {
-          console.warn('Firebase registration attempt:', fbErr.message);
-          if (fbErr.code === 'auth/email-already-in-use') {
-            throw new Error('This email is already registered in your Firebase project.');
-          }
-        }
-      }
-
+      // 1. Primary Registration via Express Backend
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 7000);
 
@@ -226,18 +201,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok && respData.user) {
         setUser(respData.user);
         setToken(respData.token);
+
+        // Also sync registration to Firebase if configured
+        if (isFirebaseConfigured && data.email && data.password) {
+          firebaseSignUp({
+            email: data.email,
+            password: data.password,
+            full_name: data.full_name,
+            role: data.role,
+            country_code: data.country_code,
+            phone_number: data.phone_number,
+          }).catch((err) => console.warn('Firebase sync note:', err.message));
+        }
         return;
       }
 
       if (res.status === 429) {
-        throw new Error('Rate limit exceeded. Please wait before creating another account.');
+        throw new Error('Rate limit reached. Please wait a moment before creating another account.');
       }
 
-      if (res.status === 400 || res.status === 409) {
+      if (res.status === 400 || res.status === 409 || res.status === 403) {
         throw new Error(respData.message || 'Registration failed. Please check your details.');
       }
 
-      // Fallback registration locally
+      // 2. If backend endpoint returned unexpected status, try Firebase Studio directly
+      if (isFirebaseConfigured && data.email && data.password) {
+        try {
+          const fbUser = await firebaseSignUp({
+            email: data.email,
+            password: data.password,
+            full_name: data.full_name,
+            role: data.role,
+            country_code: data.country_code,
+            phone_number: data.phone_number,
+          });
+          if (fbUser) {
+            setUser(fbUser);
+            setToken(`fb-${fbUser.id}`);
+            return;
+          }
+        } catch (fbErr: any) {
+          console.warn('Firebase direct registration fallback note:', fbErr.message);
+          if (fbErr.code === 'auth/email-already-in-use') {
+            throw new Error('This email is already registered. Please sign in instead.');
+          }
+        }
+      }
+
+      // 3. Fallback client-side user
       const newUser: User = {
         id: crypto.randomUUID ? crypto.randomUUID() : `usr-${Date.now()}`,
         email: data.email,
@@ -252,7 +263,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setToken(`mock-token-${newUser.id}`);
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        throw new Error('Server took too long to load. Please check your internet connection.');
+        throw new Error('Server took too long to respond. Please check your internet connection.');
       }
       throw err;
     } finally {

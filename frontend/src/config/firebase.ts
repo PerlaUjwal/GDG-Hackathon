@@ -68,28 +68,34 @@ export { auth, db };
  * Sign in user with Firebase Email & Password
  */
 export async function firebaseSignIn(email: string, pass: string): Promise<User | null> {
-  if (!auth || !db) return null;
+  if (!auth) return null;
   const cred: UserCredential = await signInWithEmailAndPassword(auth, email, pass);
   const uid = cred.user.uid;
 
-  // Retrieve user document from Firestore
-  const userDocRef = doc(db, 'users', uid);
-  const userDocSnap = await getDoc(userDocRef);
+  // Retrieve user document from Firestore safely if available
+  if (db) {
+    try {
+      const userDocRef = doc(db, 'users', uid);
+      const userDocSnap = await getDoc(userDocRef);
 
-  if (userDocSnap.exists()) {
-    const data = userDocSnap.data();
-    return {
-      id: uid,
-      email: cred.user.email || email,
-      full_name: data.full_name || cred.user.displayName || 'FoundersGate User',
-      role: (data.role as UserRole) || 'founder',
-      country_code: data.country_code || '+1',
-      phone_number: data.phone_number || '',
-      created_at: data.created_at || Date.now(),
-    };
+      if (userDocSnap.exists()) {
+        const data = userDocSnap.data();
+        return {
+          id: uid,
+          email: cred.user.email || email,
+          full_name: data.full_name || cred.user.displayName || 'FoundersGate User',
+          role: (data.role as UserRole) || 'founder',
+          country_code: data.country_code || '+1',
+          phone_number: data.phone_number || '',
+          created_at: data.created_at || Date.now(),
+        };
+      }
+    } catch (fsErr) {
+      console.warn('Firestore profile fetch failed (Firestore may not be enabled):', fsErr);
+    }
   }
 
-  // Fallback if firestore document hasn't been created yet
+  // Fallback if firestore document hasn't been created yet or firestore is disabled
   return {
     id: uid,
     email: cred.user.email || email,
@@ -112,7 +118,7 @@ export async function firebaseSignUp(params: {
   country_code: string;
   phone_number: string;
 }): Promise<User | null> {
-  if (!auth || !db) return null;
+  if (!auth) return null;
 
   const cred: UserCredential = await createUserWithEmailAndPassword(auth, params.email, params.password);
   const uid = cred.user.uid;
@@ -127,11 +133,17 @@ export async function firebaseSignUp(params: {
     created_at: Date.now(),
   };
 
-  // Save profile document in Firestore: /users/{uid}
-  await setDoc(doc(db, 'users', uid), {
-    ...userProfile,
-    updated_at: Date.now(),
-  });
+  // Save profile document in Firestore: /users/{uid} safely
+  if (db) {
+    try {
+      await setDoc(doc(db, 'users', uid), {
+        ...userProfile,
+        updated_at: Date.now(),
+      });
+    } catch (fsErr) {
+      console.warn('Firestore setDoc failed (Firestore may not be enabled):', fsErr);
+    }
+  }
 
   return userProfile;
 }

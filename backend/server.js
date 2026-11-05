@@ -116,16 +116,15 @@ const authLimiter = rateLimit({
   },
 });
 
-// STRICT GLOBAL REGISTRATION RATE LIMITER: STRICTLY 5 ACCOUNTS PER MINUTE GLOBALLY
+// GLOBAL REGISTRATION RATE LIMITER
 const globalRegistrationLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 5, // strictly 5 registration requests across the entire server per minute
+  max: 60, // 60 registration requests per minute
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: () => 'global_system_registration_key', // Global across all IPs & devices
   message: {
     error: 'RATE_LIMITED_GLOBAL',
-    message: 'Global registration rate limit reached. Only 5 account creations allowed per minute across the platform. Please try again in 60 seconds.',
+    message: 'Registration rate limit reached. Please wait a moment and try again.',
   },
 });
 
