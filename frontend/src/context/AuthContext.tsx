@@ -92,11 +92,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // 1. Try local Express backend API first
-      let backendError: string | null = null;
+      // 1. If Firebase Studio is configured, try authenticate via Firebase Auth with timeout
+      if (isFirebaseConfigured && payload.email) {
+        try {
+          const fbUser = await Promise.race([
+            firebaseSignIn(payload.email, payload.password || fallbackPassword),
+            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Firebase Auth timeout')), 3500)),
+          ]);
+          if (fbUser) {
+            setUser(fbUser);
+            setToken(`fb-${fbUser.id}`);
+            return;
+          }
+        } catch (fbErr: any) {
+          console.warn('Firebase authentication attempt notice:', fbErr.message);
+          if (fbErr.code === 'auth/wrong-password') {
+            throw new Error('Incorrect password entered for this Firebase account.');
+          }
+          // For other errors (e.g. user not found in Firebase), fall through to Express backend & seed accounts
+        }
+      }
+
+      // 2. Try Local Express Backend
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 7000);
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
 
         const res = await fetch(`${API_BASE_URL}/auth/login`, {
           method: 'POST',
@@ -111,40 +131,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (res.ok && data.user) {
           setUser(data.user);
           setToken(data.token);
-          // Sync with Firebase in background if configured and email is provided
-          if (isFirebaseConfigured && payload.email && payload.password) {
-            firebaseSignIn(payload.email, payload.password).catch(() => {});
-          }
           return;
         }
 
         if (res.status === 429) {
-          throw new Error('Too many authentication attempts. Please wait a few moments.');
+          throw new Error('Too many authentication attempts. Rate limit reached; please wait a few moments.');
         }
 
-        backendError = data.message;
-      } catch (fetchErr: any) {
-        if (fetchErr.name === 'AbortError') {
-          throw new Error('Request timed out while connecting to the server. Please check your connection.');
+        if (res.status === 401 && data.message && data.message.includes('Incorrect password')) {
+          throw new Error('Incorrect password entered.');
         }
-        backendError = fetchErr.message;
-      }
-
-      // 2. If backend did not authenticate, try Firebase Auth if configured & email provided
-      if (isFirebaseConfigured && payload.email) {
-        try {
-          const fbUser = await firebaseSignIn(payload.email, payload.password || fallbackPassword);
-          if (fbUser) {
-            setUser(fbUser);
-            setToken(`fb-${fbUser.id}`);
-            return;
-          }
-        } catch (fbErr: any) {
-          console.warn('Firebase authentication attempt:', fbErr.message);
+      } catch (backendErr: any) {
+        if (backendErr.message && (backendErr.message.includes('Rate limit') || backendErr.message.includes('Incorrect password'))) {
+          throw backendErr;
         }
       }
 
-      // 3. Check local mock users if backend & Firebase return error
+      // 3. Fallback: check initial demo seed users (Alex, Sarah, Maria, Kenji, David, Elena)
       const cleanPhone = payload.phone_number ? payload.phone_number.replace(/\D/g, '') : null;
       const found = INITIAL_USERS.find((u) => {
         if (cleanPhone && u.phone_number.replace(/\D/g, '') === cleanPhone) {
@@ -157,12 +160,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (found) {
+        if (payload.password && payload.password !== 'Password123!') {
+          throw new Error('Incorrect password entered.');
+        }
         setUser(found);
         setToken(`mock-token-${found.id}`);
         return;
       }
 
-      throw new Error(backendError || 'Invalid credentials. Please verify your mobile number or email and password.');
+      throw new Error('Invalid credentials. Please verify your mobile number or password.');
     } finally {
       setIsLoading(false);
     }
@@ -184,71 +190,75 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // 1. Primary Registration via Express Backend
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 7000);
-
-      const res = await fetch(`${API_BASE_URL}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      const respData = await res.json().catch(() => ({}));
-
-      if (res.ok && respData.user) {
-        setUser(respData.user);
-        setToken(respData.token);
-
-        // Also sync registration to Firebase if configured
-        if (isFirebaseConfigured && data.email && data.password) {
-          firebaseSignUp({
-            email: data.email,
-            password: data.password,
-            full_name: data.full_name,
-            role: data.role,
-            country_code: data.country_code,
-            phone_number: data.phone_number,
-          }).catch((err) => console.warn('Firebase sync note:', err.message));
-        }
-        return;
-      }
-
-      if (res.status === 429) {
-        throw new Error('Rate limit reached. Please wait a moment before creating another account.');
-      }
-
-      if (res.status === 400 || res.status === 409 || res.status === 403) {
-        throw new Error(respData.message || 'Registration failed. Please check your details.');
-      }
-
-      // 2. If backend endpoint returned unexpected status, try Firebase Studio directly
-      if (isFirebaseConfigured && data.email && data.password) {
+      // 1. If Firebase Studio is configured, try create in Firebase Auth with timeout
+      if (isFirebaseConfigured && data.email) {
         try {
-          const fbUser = await firebaseSignUp({
-            email: data.email,
-            password: data.password,
-            full_name: data.full_name,
-            role: data.role,
-            country_code: data.country_code,
-            phone_number: data.phone_number,
-          });
+          const fbUser = await Promise.race([
+            firebaseSignUp({
+              email: data.email,
+              password: data.password || 'Password123!',
+              full_name: data.full_name,
+              role: data.role,
+              country_code: data.country_code,
+              phone_number: data.phone_number,
+            }),
+            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Firebase timeout')), 4000)),
+          ]);
           if (fbUser) {
             setUser(fbUser);
             setToken(`fb-${fbUser.id}`);
+            // Also notify local Express backend in background (fire-and-forget)
+            fetch(`${API_BASE_URL}/auth/register`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(data),
+            }).catch(() => {});
             return;
           }
         } catch (fbErr: any) {
-          console.warn('Firebase direct registration fallback note:', fbErr.message);
+          console.warn('Firebase registration notice:', fbErr.message);
           if (fbErr.code === 'auth/email-already-in-use') {
             throw new Error('This email is already registered. Please sign in instead.');
           }
         }
       }
 
-      // 3. Fallback client-side user
+      // 2. Try Local Express Backend
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+        const res = await fetch(`${API_BASE_URL}/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        const respData = await res.json().catch(() => ({}));
+
+        if (res.ok && respData.user) {
+          setUser(respData.user);
+          setToken(respData.token);
+          return;
+        }
+
+        if (res.status === 429) {
+          throw new Error('Rate limit reached (max 5 registrations per minute). Please wait a moment.');
+        }
+
+        if (res.status === 400 || res.status === 409) {
+          throw new Error(respData.message || 'Registration failed. Please check your details.');
+        }
+      } catch (backendErr: any) {
+        if (backendErr.message && (backendErr.message.includes('Rate limit') || backendErr.message.includes('already exists'))) {
+          throw backendErr;
+        }
+        console.warn('Backend registration notice, using resilient local session:', backendErr.message);
+      }
+
+      // 3. Resilient fallback registration locally (ensures user always enters dashboard)
       const newUser: User = {
         id: crypto.randomUUID ? crypto.randomUUID() : `usr-${Date.now()}`,
         email: data.email,
@@ -261,11 +271,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setUser(newUser);
       setToken(`mock-token-${newUser.id}`);
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw new Error('Server took too long to respond. Please check your internet connection.');
-      }
-      throw err;
     } finally {
       setIsLoading(false);
     }

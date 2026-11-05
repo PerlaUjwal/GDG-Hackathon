@@ -72,39 +72,41 @@ export async function firebaseSignIn(email: string, pass: string): Promise<User 
   const cred: UserCredential = await signInWithEmailAndPassword(auth, email, pass);
   const uid = cred.user.uid;
 
-  // Retrieve user document from Firestore safely if available
-  if (db) {
-    try {
-      const userDocRef = doc(db, 'users', uid);
-      const userDocSnap = await getDoc(userDocRef);
-
-      if (userDocSnap.exists()) {
-        const data = userDocSnap.data();
-        return {
-          id: uid,
-          email: cred.user.email || email,
-          full_name: data.full_name || cred.user.displayName || 'FoundersGate User',
-          role: (data.role as UserRole) || 'founder',
-          country_code: data.country_code || '+1',
-          phone_number: data.phone_number || '',
-          created_at: data.created_at || Date.now(),
-        };
-      }
-    } catch (fsErr) {
-      console.warn('Firestore profile fetch failed (Firestore may not be enabled):', fsErr);
-    }
-  }
-
-  // Fallback if firestore document hasn't been created yet or firestore is disabled
-  return {
+  let userProfile: User = {
     id: uid,
     email: cred.user.email || email,
-    full_name: cred.user.displayName || 'FoundersGate User',
+    full_name: cred.user.displayName || email.split('@')[0],
     role: 'founder',
     country_code: '+1',
     phone_number: '',
     created_at: Date.now(),
   };
+
+  // Retrieve user document from Firestore with strict 2.5s timeout (non-blocking)
+  if (db) {
+    try {
+      const snap = await Promise.race([
+        getDoc(doc(db, 'users', uid)),
+        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 2500)),
+      ]);
+
+      if (snap && snap.exists()) {
+        const data = snap.data();
+        userProfile = {
+          ...userProfile,
+          full_name: data.full_name || userProfile.full_name,
+          role: (data.role as UserRole) || userProfile.role,
+          country_code: data.country_code || userProfile.country_code,
+          phone_number: data.phone_number || userProfile.phone_number,
+          created_at: data.created_at || userProfile.created_at,
+        };
+      }
+    } catch (e) {
+      console.warn('ℹ️ [Firebase] Firestore profile read skipped/timed out (using Auth profile):', e);
+    }
+  }
+
+  return userProfile;
 }
 
 /**
@@ -133,15 +135,18 @@ export async function firebaseSignUp(params: {
     created_at: Date.now(),
   };
 
-  // Save profile document in Firestore: /users/{uid} safely
+  // Attempt to save profile document in Firestore: /users/{uid} with strict 2.5s timeout (non-blocking)
   if (db) {
     try {
-      await setDoc(doc(db, 'users', uid), {
-        ...userProfile,
-        updated_at: Date.now(),
-      });
-    } catch (fsErr) {
-      console.warn('Firestore setDoc failed (Firestore may not be enabled):', fsErr);
+      await Promise.race([
+        setDoc(doc(db, 'users', uid), {
+          ...userProfile,
+          updated_at: Date.now(),
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 2500)),
+      ]);
+    } catch (e) {
+      console.warn('ℹ️ [Firebase] Firestore profile write skipped/timed out (Auth account created successfully):', e);
     }
   }
 

@@ -110,10 +110,7 @@ export const AuthPage: React.FC = () => {
 
   // Quick demo account pre-fill
   const handleDemoFill = (demoRole: UserRole) => {
-    setActiveTab('login');
     setRole(demoRole);
-    setErrorMessage(null);
-    setSuccessMessage(null);
     if (demoRole === 'founder') {
       setFullName('Alex Vance');
       setEmail('alex.founder@tech.io');
@@ -121,13 +118,13 @@ export const AuthPage: React.FC = () => {
       setCountryCode('+1');
       setPhoneNumber('4155552671');
     } else if (demoRole === 'investor') {
-      setFullName('Sarah Jenkins');
+      setFullName('Sarah Lin');
       setEmail('sarah.investor@vcfund.com');
       setPassword('Password123!');
       setCountryCode('+1');
       setPhoneNumber('6505553901');
     } else {
-      setFullName('Maria Santos');
+      setFullName('Maria Rossi');
       setEmail('maria.shop@greenmarket.com');
       setPassword('Password123!');
       setCountryCode('+1');
