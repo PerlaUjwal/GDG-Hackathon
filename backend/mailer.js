@@ -123,7 +123,7 @@ export async function sendEmailOTP(toEmail, code, purpose = 'register') {
       html: htmlContent,
     });
 
-    const previewUrl = provider === 'ethereal' ? (nodemailer.getTestMessageUrl(info) || null) : null;
+    const previewUrl = nodemailer.getTestMessageUrl(info) || null;
 
     console.log(`\n======================================================`);
     console.log(`[DISPATCH SUCCESS] Provider: ${provider.toUpperCase()}`);
@@ -142,15 +142,55 @@ export async function sendEmailOTP(toEmail, code, purpose = 'register') {
       previewUrl,
     };
   } catch (error) {
-    console.error('[EMAIL DISPATCH ERROR]', error);
-    let friendlyError = error.message;
-    if (error.code === 'EAUTH') {
-      friendlyError = `Google rejected login (535 BadCredentials). Make sure GMAIL_APP_PASS was generated for "${process.env.GMAIL_USER?.trim()}" at https://myaccount.google.com/apppasswords.`;
+    console.warn('[DISPATCH NOTICE] Fallback to Ethereal live preview:', error.message);
+    try {
+      if (!cachedEtherealTransporter) {
+        const testAccount = await nodemailer.createTestAccount();
+        cachedEtherealTransporter = nodemailer.createTransport({
+          host: testAccount.smtp.host,
+          port: testAccount.smtp.port,
+          secure: testAccount.smtp.secure,
+          auth: {
+            user: testAccount.user,
+            pass: testAccount.pass,
+          },
+        });
+      }
+
+      const fallbackInfo = await cachedEtherealTransporter.sendMail({
+        from: '"FoundersGate Security" <no-reply@foundersgate.com>',
+        to: toEmail,
+        subject: purpose === 'reset' ? '🔐 FoundersGate Password Reset Code' : '🚀 FoundersGate Verification Code',
+        text: `Your FoundersGate verification code is: ${code}. Valid for 10 minutes. (Max 3 attempts).`,
+        html: `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; background: #e0e5ec; border-radius: 16px;">
+            <h2 style="color: #2d3748; text-align: center; margin: 0 0 16px;">FoundersGate</h2>
+            <div style="background: #e0e5ec; border-radius: 12px; padding: 20px; text-align: center; box-shadow: inset 4px 4px 8px #b8b9be, inset -4px -4px 8px #ffffff;">
+              <p style="color: #4a5568; margin: 0 0 10px; font-size: 14px;">Your 6-digit verification code is:</p>
+              <div style="font-size: 36px; font-weight: 800; color: #4f46e5; letter-spacing: 8px; font-family: monospace;">${code}</div>
+              <p style="color: #a0aec0; font-size: 12px; margin: 8px 0 0;">Valid for 10 minutes. Max 3 attempts.</p>
+            </div>
+          </div>
+        `,
+      });
+
+      const fallbackPreviewUrl = nodemailer.getTestMessageUrl(fallbackInfo) || null;
+      console.log(`[ETHEREAL PREVIEW URL] ${fallbackPreviewUrl}`);
+
+      return {
+        success: true,
+        provider: 'ethereal',
+        isReal: false,
+        messageId: fallbackInfo.messageId,
+        previewUrl: fallbackPreviewUrl,
+      };
+    } catch (fallbackError) {
+      console.error('[FALLBACK ERROR]', fallbackError);
+      return {
+        success: false,
+        error: error.message,
+      };
     }
-    return {
-      success: false,
-      error: friendlyError,
-    };
   }
 }
 
