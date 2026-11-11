@@ -56,16 +56,15 @@ export const NormalDashboard: React.FC = () => {
 
   // Load Products & Inquiries
   const loadData = useCallback(async () => {
-    setIsLoading(true);
     try {
-      const data = await fetchWithCache<Product[]>('/products', {}, 10000, token);
+      const data = await fetchWithCache<Product[]>('/products', {}, 2000, token);
       setProducts(data.length > 0 ? data : INITIAL_PRODUCTS);
     } catch {
       setProducts(INITIAL_PRODUCTS);
     }
 
     try {
-      const inq = await fetchWithCache<ProductInquiry[]>('/vendor/inquiries', {}, 10000, token);
+      const inq = await fetchWithCache<ProductInquiry[]>('/vendor/inquiries', {}, 2000, token);
       setInquiries(inq.length > 0 ? inq : INITIAL_INQUIRIES);
     } catch {
       setInquiries(INITIAL_INQUIRIES);
@@ -76,6 +75,9 @@ export const NormalDashboard: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    // Auto-refresh every 4s so products added by any seller appear live for all buyers
+    const interval = setInterval(loadData, 4000);
+    return () => clearInterval(interval);
   }, [loadData]);
 
   // Handle Image File Selection with Client-Side Canvas Compression
@@ -119,7 +121,7 @@ export const NormalDashboard: React.FC = () => {
       };
 
       try {
-        await fetch('/api/products', {
+        const res = await fetch('/api/products', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -127,12 +129,19 @@ export const NormalDashboard: React.FC = () => {
           },
           body: JSON.stringify(newProd),
         });
+        if (res.ok) {
+          const created = await res.json().catch(() => newProd);
+          if (created && created.id) {
+            newProd.id = created.id;
+            newProd.vendor_id = created.vendor_id || newProd.vendor_id;
+          }
+        }
       } catch {
         // Handled locally
       }
 
-      setProducts((prev) => [newProd, ...prev]);
       invalidateClientCache('/products');
+      setProducts((prev) => [newProd, ...prev.filter(p => p.id !== newProd.id)]);
 
       setTitle('');
       setDescription('');

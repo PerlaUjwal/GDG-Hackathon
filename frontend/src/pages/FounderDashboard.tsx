@@ -46,18 +46,16 @@ export const FounderDashboard: React.FC<FounderDashboardProps> = ({
 
   // Load Startups (UUID bounded)
   const loadStartups = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
     try {
-      // Fetch from API
-      const data = await fetchWithCache<Startup[]>('/startups', {}, 10000, token);
+      // Fetch from API with fresh 2s cache
+      const data = await fetchWithCache<Startup[]>('/startups', {}, 2000, token);
       // Filter for this founder's UUID
       const founderStartups = data.filter((s) => s.founder_id === user?.id);
-      setStartups(founderStartups.length > 0 ? founderStartups : data);
+      setStartups(founderStartups);
     } catch {
       // Fallback to mock data filtered by founder
       const mockList = INITIAL_STARTUPS.filter((s) => s.founder_id === user?.id);
-      setStartups(mockList.length > 0 ? mockList : INITIAL_STARTUPS);
+      setStartups(mockList);
     } finally {
       setIsLoading(false);
     }
@@ -65,6 +63,9 @@ export const FounderDashboard: React.FC<FounderDashboardProps> = ({
 
   useEffect(() => {
     loadStartups();
+    // Auto-refresh every 4 seconds to sync bids and investor interest live
+    const interval = setInterval(loadStartups, 4000);
+    return () => clearInterval(interval);
   }, [loadStartups]);
 
   // Create New Pitch
@@ -91,7 +92,7 @@ export const FounderDashboard: React.FC<FounderDashboardProps> = ({
       };
 
       try {
-        await fetch('/api/startups', {
+        const res = await fetch('/api/startups', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -99,11 +100,19 @@ export const FounderDashboard: React.FC<FounderDashboardProps> = ({
           },
           body: JSON.stringify(newStartup),
         });
+        if (res.ok) {
+          const created = await res.json().catch(() => newStartup);
+          if (created && created.id) {
+            newStartup.id = created.id;
+            newStartup.founder_id = created.founder_id || newStartup.founder_id;
+          }
+        }
       } catch {
         // Handled locally
       }
 
-      setStartups((prev) => [newStartup, ...prev]);
+      invalidateClientCache('/startups');
+      setStartups((prev) => [newStartup, ...prev.filter(s => s.id !== newStartup.id)]);
       setIsNewPitchOpen(false);
       setTitle('');
       setPitch('');

@@ -36,9 +36,8 @@ export const InvestorDashboard: React.FC = () => {
 
   // Load Startups
   const loadStartups = useCallback(async () => {
-    setIsLoading(true);
     try {
-      const data = await fetchWithCache<Startup[]>('/startups', {}, 10000, token);
+      const data = await fetchWithCache<Startup[]>('/startups', {}, 2000, token);
       setStartups(data.length > 0 ? data : INITIAL_STARTUPS);
     } catch {
       setStartups(INITIAL_STARTUPS);
@@ -49,6 +48,9 @@ export const InvestorDashboard: React.FC = () => {
 
   useEffect(() => {
     loadStartups();
+    // Auto-refresh every 4s to catch new startup pitches live from all founders
+    const interval = setInterval(loadStartups, 4000);
+    return () => clearInterval(interval);
   }, [loadStartups]);
 
   // Express Interest in a Startup Pitch

@@ -433,6 +433,45 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
+// Sync or create user from Google / Firebase Auth
+app.post('/api/auth/sync-user', (req, res) => {
+  const { id, email, full_name, role, country_code, phone_number } = req.body;
+  if (!id || !email) {
+    return res.status(400).json({ error: 'MISSING_DATA', message: 'ID and email are required.' });
+  }
+
+  const existing = db.prepare('SELECT * FROM users WHERE id = ? OR email = ?').get(id, email.toLowerCase());
+  const now = Date.now();
+  let userRecord;
+
+  if (existing) {
+    userRecord = existing;
+    if (role && existing.role !== role) {
+      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, existing.id);
+      userRecord.role = role;
+    }
+  } else {
+    const cleanPhone = (phone_number || '').replace(/\D/g, '') || '5550100';
+    db.prepare(`
+      INSERT INTO users (id, email, password_hash, full_name, role, country_code, phone_number, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      email.toLowerCase(),
+      'google-auth-no-password',
+      full_name || email.split('@')[0],
+      role || 'founder',
+      country_code || '+1',
+      cleanPhone,
+      now
+    );
+    userRecord = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  }
+
+  const token = jwt.sign({ id: userRecord.id, role: userRecord.role, email: userRecord.email }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, user: userRecord });
+});
+
 // Forgot Password - Generates Token Valid Strictly for 30 Minutes
 app.post('/api/auth/forgot-password', (req, res) => {
   const { email } = req.body;
@@ -513,18 +552,18 @@ app.get('/api/startups', (req, res) => {
 
   // Optimized single query joining founder details, interest counts, and bids
   const startups = db.prepare(`
-    SELECT s.*, u.full_name as founder_name,
+    SELECT s.*, COALESCE(u.full_name, s.founder_name, 'Founder') as founder_name,
       (SELECT COUNT(*) FROM startup_interests WHERE startup_id = s.id) as interest_count
     FROM startups s
-    JOIN users u ON s.founder_id = u.id
+    LEFT JOIN users u ON s.founder_id = u.id
     ORDER BY s.created_at DESC
   `).all();
 
   // Attach bids
   const bids = db.prepare(`
-    SELECT b.*, u.full_name as investor_name, u.phone_number as investor_phone, u.country_code as investor_country
+    SELECT b.*, COALESCE(u.full_name, b.investor_name, 'Accredited Investor') as investor_name, u.phone_number as investor_phone, u.country_code as investor_country
     FROM auction_bids b
-    JOIN users u ON b.investor_id = u.id
+    LEFT JOIN users u ON b.investor_id = u.id
   `).all();
 
   const bidsByStartup = bids.reduce((acc, b) => {
@@ -541,7 +580,7 @@ app.get('/api/startups', (req, res) => {
     bids: bidsByStartup[s.id] || [],
   }));
 
-  apiCache.set('startups_list', result, 15000); // 15s cache
+  apiCache.set('startups_list', result, 2000); // 2s cache for fast multi-user sync
   res.json(result);
 });
 
@@ -800,9 +839,9 @@ app.get('/api/products', (req, res) => {
   }
 
   const products = db.prepare(`
-    SELECT p.*, u.full_name as vendor_name, u.phone_number as vendor_phone, u.country_code as vendor_country
+    SELECT p.*, COALESCE(u.full_name, p.vendor_name, 'Local Merchant') as vendor_name, u.phone_number as vendor_phone, u.country_code as vendor_country
     FROM products p
-    JOIN users u ON p.vendor_id = u.id
+    LEFT JOIN users u ON p.vendor_id = u.id
     ORDER BY p.created_at DESC
   `).all();
 
@@ -811,7 +850,7 @@ app.get('/api/products', (req, res) => {
     vendor_phone: p.vendor_phone ? `${p.vendor_country} ${p.vendor_phone}` : undefined,
   }));
 
-  apiCache.set('products_list', formatted, 15000);
+  apiCache.set('products_list', formatted, 2000); // 2s cache for fast multi-user sync
   res.json(formatted);
 });
 
