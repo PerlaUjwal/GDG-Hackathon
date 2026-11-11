@@ -6,7 +6,6 @@ import {
   isFirebaseConfigured,
   firebaseSignIn,
   firebaseSignUp,
-  firebaseGoogleSignIn,
   firebaseSignOut,
 } from '../config/firebase';
 
@@ -23,7 +22,6 @@ interface AuthContextType {
   isLoading: boolean;
   isFirebaseConnected: boolean;
   login: (params: LoginParams | string, password?: string) => Promise<void>;
-  loginWithGoogle: (preferredRole?: UserRole) => Promise<void>;
   register: (data: {
     email: string;
     password?: string;
@@ -278,58 +276,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginWithGoogle = async (preferredRole: UserRole = 'founder') => {
-    setIsLoading(true);
-    try {
-      if (!isFirebaseConfigured) {
-        throw new Error('Google Sign-In requires Firebase configuration. You can use standard Sign In below.');
-      }
-      const fbUser = await firebaseGoogleSignIn();
-      if (!fbUser) {
-        throw new Error('Google Sign-In was cancelled or not completed.');
-      }
-      fbUser.role = preferredRole;
-
-      // Sync user to Express backend to obtain JWT and ensure DB has this user
-      try {
-        const res = await fetch(`${API_BASE_URL}/auth/sync-user`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: fbUser.id,
-            email: fbUser.email,
-            full_name: fbUser.full_name,
-            role: fbUser.role,
-            country_code: fbUser.country_code,
-            phone_number: fbUser.phone_number,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (data.token) {
-          setToken(data.token);
-          setUser(data.user || fbUser);
-          return;
-        }
-      } catch {}
-
-      setUser(fbUser);
-      setToken(`fb-${fbUser.id}`);
-    } catch (err: any) {
-      if (err.code === 'auth/popup-closed-by-user') {
-        throw new Error('Google Sign-In popup was closed. Please try again or use direct login.');
-      }
-      if (err.code === 'auth/unauthorized-domain') {
-        throw new Error('This domain is not authorized in Firebase Console -> Auth -> Settings -> Authorized domains.');
-      }
-      if (err.code === 'auth/operation-not-allowed') {
-        throw new Error('Google provider is not enabled in Firebase Console. Please enable it in Authentication > Sign-in method.');
-      }
-      throw new Error(err.message || 'Google Sign-In failed. Please try standard sign-in.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const logout = () => {
     if (isFirebaseConfigured) {
       firebaseSignOut().catch(() => {});
@@ -356,7 +302,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLoading,
         isFirebaseConnected: isFirebaseConfigured,
         login,
-        loginWithGoogle,
         register,
         logout,
         switchUserRoleDemo,

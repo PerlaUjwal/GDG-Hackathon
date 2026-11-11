@@ -3,8 +3,6 @@ import {
   getAuth,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithPopup,
-  GoogleAuthProvider,
   signOut,
   sendPasswordResetEmail,
   type Auth,
@@ -162,51 +160,6 @@ export async function firebaseResetPassword(email: string): Promise<boolean> {
   if (!auth) return false;
   await sendPasswordResetEmail(auth, email);
   return true;
-}
-
-/**
- * Sign in user with Google popup via Firebase
- */
-export async function firebaseGoogleSignIn(): Promise<User | null> {
-  if (!auth) return null;
-  const provider = new GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: 'select_account' });
-  const cred: UserCredential = await signInWithPopup(auth, provider);
-  const uid = cred.user.uid;
-  const email = cred.user.email || '';
-  const fullName = cred.user.displayName || email.split('@')[0] || 'Google User';
-
-  let userProfile: User = {
-    id: uid,
-    email: email.toLowerCase(),
-    full_name: fullName,
-    role: 'founder',
-    country_code: '+1',
-    phone_number: cred.user.phoneNumber || '',
-    created_at: Date.now(),
-  };
-
-  if (db) {
-    try {
-      const snap = await Promise.race([
-        getDoc(doc(db, 'users', uid)),
-        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 2500)),
-      ]);
-      if (snap && snap.exists()) {
-        const data = snap.data();
-        userProfile = {
-          ...userProfile,
-          role: (data.role as UserRole) || userProfile.role,
-          country_code: data.country_code || userProfile.country_code,
-          phone_number: data.phone_number || userProfile.phone_number,
-        };
-      }
-    } catch (e) {
-      console.warn('ℹ️ [Firebase] Firestore profile read skipped/timed out for Google user:', e);
-    }
-  }
-
-  return userProfile;
 }
 
 /**

@@ -433,45 +433,6 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
-// Sync or create user from Google / Firebase Auth
-app.post('/api/auth/sync-user', (req, res) => {
-  const { id, email, full_name, role, country_code, phone_number } = req.body;
-  if (!id || !email) {
-    return res.status(400).json({ error: 'MISSING_DATA', message: 'ID and email are required.' });
-  }
-
-  const existing = db.prepare('SELECT * FROM users WHERE id = ? OR email = ?').get(id, email.toLowerCase());
-  const now = Date.now();
-  let userRecord;
-
-  if (existing) {
-    userRecord = existing;
-    if (role && existing.role !== role) {
-      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, existing.id);
-      userRecord.role = role;
-    }
-  } else {
-    const cleanPhone = (phone_number || '').replace(/\D/g, '') || '5550100';
-    db.prepare(`
-      INSERT INTO users (id, email, password_hash, full_name, role, country_code, phone_number, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      email.toLowerCase(),
-      'google-auth-no-password',
-      full_name || email.split('@')[0],
-      role || 'founder',
-      country_code || '+1',
-      cleanPhone,
-      now
-    );
-    userRecord = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
-  }
-
-  const token = jwt.sign({ id: userRecord.id, role: userRecord.role, email: userRecord.email }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ token, user: userRecord });
-});
-
 // Forgot Password - Generates Token Valid Strictly for 30 Minutes
 app.post('/api/auth/forgot-password', (req, res) => {
   const { email } = req.body;

@@ -465,6 +465,24 @@ class IndexedDatabase {
           return { count: interests ? interests.size : 0 };
         }
 
+        // SELECT COUNT(*) as count FROM products WHERE vendor_id = ?
+        if (/SELECT COUNT\(\*\) as count FROM products WHERE vendor_id = \?/i.test(s)) {
+          const vendorId = params[0];
+          const prods = self.indexes.products_vendor.get(vendorId);
+          return { count: prods ? prods.size : 0 };
+        }
+
+        // SELECT * FROM users WHERE id = ? OR email = ?
+        if (/FROM users WHERE id = \? OR email = \?/i.test(s)) {
+          const id = params[0];
+          const email = (params[1] || '').toLowerCase();
+          const userById = id ? self.tables.users.get(id) : undefined;
+          if (userById) return { ...userById };
+          const userIdByEmail = email ? self.indexes.users_email.get(email) : undefined;
+          if (userIdByEmail) return { ...self.tables.users.get(userIdByEmail) };
+          return undefined;
+        }
+
         // SELECT id, email, role, full_name, country_code, phone_number FROM users WHERE id = ?
         // OR SELECT * FROM users WHERE id = ?
         if (/FROM users WHERE id = \?/i.test(s)) {

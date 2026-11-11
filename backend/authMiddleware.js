@@ -11,9 +11,9 @@ export function authenticateToken(req, res, next) {
     return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication token required' });
   }
 
-  // 1. Support mock tokens and Firebase UID tokens (mock-token-* or fb-*)
-  if (token.startsWith('mock-token-') || token.startsWith('fb-')) {
-    const rawId = token.replace(/^(mock-token-|fb-)/, '');
+  // 1. Support mock tokens (mock-token-*)
+  if (token.startsWith('mock-token-')) {
+    const rawId = token.replace(/^mock-token-/, '');
 
     // Check if user exists by exact ID or email
     let user = db.prepare('SELECT id, email, role, full_name, country_code, phone_number FROM users WHERE id = ? OR email = ?').get(rawId, rawId);
